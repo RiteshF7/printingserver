@@ -1,0 +1,921 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF Preview and Print - Double Sided</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            opacity: 0.9;
+            font-size: 1.1em;
+        }
+
+        .controls {
+            padding: 30px;
+            background: #f8f9fa;
+            border-bottom: 2px solid #e9ecef;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .btn {
+            padding: 12px 30px;
+            font-size: 16px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-success {
+            background: #28a745;
+            color: white;
+        }
+
+        .btn-success:hover {
+            background: #218838;
+            transform: translateY(-2px);
+        }
+
+        .btn-warning {
+            background: #ffc107;
+            color: #212529;
+        }
+
+        .btn-warning:hover {
+            background: #e0a800;
+            transform: translateY(-2px);
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .status {
+            padding: 15px 30px;
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            margin: 0 30px;
+            border-radius: 5px;
+            font-weight: 500;
+            display: none;
+        }
+
+        .status.show {
+            display: block;
+        }
+
+        .status.info {
+            background: #d1ecf1;
+            border-left-color: #0c5460;
+            color: #0c5460;
+        }
+
+        .status.success {
+            background: #d4edda;
+            border-left-color: #28a745;
+            color: #155724;
+        }
+
+        .status.error {
+            background: #f8d7da;
+            border-left-color: #dc3545;
+            color: #721c24;
+        }
+
+        .pdf-viewer {
+            padding: 30px;
+            text-align: center;
+            min-height: 600px;
+            background: #f8f9fa;
+        }
+
+        .pdf-viewer iframe {
+            width: 100%;
+            height: 800px;
+            border: 2px solid #dee2e6;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        .instructions {
+            padding: 20px 30px;
+            background: #e7f3ff;
+            border-top: 2px solid #b3d9ff;
+        }
+
+        .instructions h3 {
+            color: #004085;
+            margin-bottom: 10px;
+        }
+
+        .instructions ol {
+            margin-left: 20px;
+            color: #004085;
+        }
+
+        .instructions li {
+            margin: 8px 0;
+            line-height: 1.6;
+        }
+
+        .dialog-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .dialog-overlay.show {
+            display: flex;
+        }
+
+        .dialog {
+            background: white;
+            padding: 40px;
+            border-radius: 15px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+            max-width: 500px;
+            text-align: center;
+            animation: slideIn 0.3s ease;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateY(-50px);
+                opacity: 0;
+            }
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+
+        .dialog h2 {
+            color: #667eea;
+            margin-bottom: 20px;
+            font-size: 1.8em;
+        }
+
+        .dialog p {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 1.1em;
+            line-height: 1.6;
+        }
+
+        .dialog-buttons {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+        }
+
+        .dialog-btn {
+            padding: 12px 30px;
+            font-size: 16px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+
+        .dialog-btn-primary {
+            background: #28a745;
+            color: white;
+        }
+
+        .dialog-btn-primary:hover {
+            background: #218838;
+            transform: translateY(-2px);
+        }
+
+        .dialog-btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+
+        .dialog-btn-secondary:hover {
+            background: #5a6268;
+        }
+
+        .page-info {
+            padding: 15px 30px;
+            background: #f8f9fa;
+            text-align: center;
+            color: #495057;
+            font-weight: 500;
+        }
+
+        .print-instructions {
+            background: #fff3cd;
+            border: 2px solid #ffc107;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 30px;
+            display: none;
+        }
+
+        .print-instructions.show {
+            display: block;
+        }
+
+        .print-instructions h4 {
+            color: #856404;
+            margin-bottom: 10px;
+        }
+
+        .print-instructions code {
+            background: #fff;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            color: #856404;
+        }
+
+        .selected-files {
+            padding: 15px 30px;
+            background: #e7f3ff;
+            border-bottom: 2px solid #b3d9ff;
+            display: none;
+        }
+
+        .selected-files.show {
+            display: block;
+        }
+
+        .selected-files h4 {
+            color: #004085;
+            margin-bottom: 10px;
+            font-size: 0.9em;
+        }
+
+        .file-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .file-tag {
+            background: #004085;
+            color: white;
+            padding: 5px 12px;
+            border-radius: 15px;
+            font-size: 0.85em;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .file-tag .remove {
+            cursor: pointer;
+            font-weight: bold;
+            opacity: 0.8;
+        }
+
+        .file-tag .remove:hover {
+            opacity: 1;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 6px;
+            background: #e9ecef;
+            border-radius: 3px;
+            overflow: hidden;
+            margin-top: 10px;
+            display: none;
+        }
+
+        .progress-bar.show {
+            display: block;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📄 PDF Preview & Print</h1>
+            <p>Double-Sided Printing Assistant</p>
+        </div>
+
+        <div class="page-info" id="pageInfo">
+            Total Pages: <span id="totalPages">-</span> | 
+            Current Stage: <span id="currentStage">Ready</span>
+        </div>
+
+        <div class="controls">
+            <button class="btn btn-primary" onclick="loadPDF()">📂 Select PDF(s) - Multiple Selection Enabled</button>
+            <button class="btn btn-success" id="printEvenBtn" onclick="printEvenPages()" disabled>🖨️ Print Even Pages (First)</button>
+            <button class="btn btn-warning" id="printOddBtn" onclick="printOddPages()" disabled>🖨️ Print Odd Pages (After Flip)</button>
+        </div>
+
+        <div class="selected-files" id="selectedFiles">
+            <h4>Selected Files (<span id="fileCount">0</span>):</h4>
+            <div class="file-list" id="fileList"></div>
+            <div class="progress-bar" id="progressBar">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+        </div>
+
+        <div class="print-instructions" id="printInstructions">
+            <h4>📋 Print Dialog Instructions:</h4>
+            <p><strong>In the print dialog that opens:</strong></p>
+            <ol style="margin-left: 20px; margin-top: 10px;">
+                <li>Look for <strong>"Pages"</strong> or <strong>"Page Range"</strong> option</li>
+                <li id="pageRangeInstruction">Enter the page range shown above</li>
+                <li>Click <strong>"Print"</strong></li>
+            </ol>
+        </div>
+
+        <div class="status" id="status"></div>
+
+        <div class="pdf-viewer">
+            <iframe id="pdfViewer" src="" style="display: none;"></iframe>
+            <div id="placeholder" style="color: #6c757d; padding: 50px;">
+                <h2>📄 No PDF Loaded</h2>
+                <p>Click "Select PDF(s)" to choose one or multiple PDF files</p>
+                <p style="margin-top: 10px; font-size: 0.9em; color: #999;">
+                    Multiple PDFs will be automatically merged with even page logic
+                </p>
+                <p style="margin-top: 10px; font-size: 0.9em; color: #999;">
+                    Or use the pre-merged file: <strong>merged_for_printing.pdf</strong>
+                </p>
+            </div>
+        </div>
+
+        <div class="instructions">
+            <h3>📋 Printing Instructions:</h3>
+            <ol>
+                <li><strong>Load PDF(s):</strong> Click "Select PDF(s)" and choose one or multiple PDF files. Multiple files will be automatically merged with even page logic (blank pages added when needed).</li>
+                <li><strong>Print Even Pages:</strong> Click "Print Even Pages" - In the print dialog, enter the even page range (e.g., 2,4,6,8... or 2-240:2 for every 2nd page)</li>
+                <li><strong>Flip Pages:</strong> After printing, flip the entire stack of printed pages</li>
+                <li><strong>Print Odd Pages:</strong> Click "Print Odd Pages" when ready - In the print dialog, enter the odd page range (e.g., 1,3,5,7... or 1-240:2 for every 2nd page starting from 1)</li>
+                <li><strong>Done:</strong> Your double-sided document is ready!</li>
+            </ol>
+            <p style="margin-top: 15px; color: #004085; font-weight: 500;">
+                💡 <strong>Tip:</strong> You can select multiple PDFs at once using Ctrl+Click (or Cmd+Click on Mac) in the file dialog. Selected files can be removed by clicking the × button.
+            </p>
+        </div>
+    </div>
+
+    <!-- Dialog for page flip confirmation -->
+    <div class="dialog-overlay" id="flipDialog">
+        <div class="dialog">
+            <h2>🔄 Flip Your Pages</h2>
+            <p>
+                <strong>Even pages have been printed!</strong><br><br>
+                Please flip the entire stack of printed pages and re-insert them into your printer.<br><br>
+                <strong>Important:</strong> Make sure the pages are flipped correctly:
+                <ul style="text-align: left; margin: 15px 0; padding-left: 30px;">
+                    <li>Top edge becomes bottom edge</li>
+                    <li>Same orientation (don't rotate)</li>
+                    <li>Re-insert with the printed side facing up</li>
+                </ul>
+            </p>
+            <div class="dialog-buttons">
+                <button class="dialog-btn dialog-btn-primary" onclick="confirmFlip()">✅ I've Flipped the Pages</button>
+                <button class="dialog-btn dialog-btn-secondary" onclick="cancelFlip()">❌ Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let pdfFile = null;
+        let pdfUrl = null;
+        let totalPages = 0;
+        let printStage = 'ready'; // 'ready', 'even_printed', 'complete'
+        let selectedFiles = [];
+        let pdfLib = null;
+
+        // Check if pdf-lib is loaded (wait for it to be available)
+        function checkPdfLib() {
+            if (typeof PDFLib !== 'undefined') {
+                pdfLib = PDFLib;
+                return true;
+            }
+            return false;
+        }
+
+        // Wait for pdf-lib to load
+        window.addEventListener('load', function() {
+            if (checkPdfLib()) {
+                console.log('pdf-lib loaded successfully');
+            } else {
+                // Try again after a short delay
+                setTimeout(() => {
+                    if (checkPdfLib()) {
+                        console.log('pdf-lib loaded successfully (delayed)');
+                    } else {
+                        console.warn('pdf-lib not available, using fallback methods');
+                    }
+                }, 500);
+            }
+        });
+
+        // Try to load the pre-merged PDF automatically
+        window.addEventListener('DOMContentLoaded', function() {
+            // Check if merged_for_printing.pdf exists (we'll try to load it)
+            const defaultPdf = 'merged_for_printing.pdf';
+            loadDefaultPDF(defaultPdf);
+        });
+
+        function loadDefaultPDF(filename) {
+            fetch(filename)
+                .then(response => {
+                    if (response.ok) {
+                        return response.blob();
+                    }
+                    throw new Error('File not found');
+                })
+                .then(blob => {
+                    pdfFile = new File([blob], filename, { type: 'application/pdf' });
+                    pdfUrl = URL.createObjectURL(blob);
+                    displayPDF(pdfUrl);
+                    getPDFPageCount(pdfFile).then(pages => {
+                        totalPages = pages;
+                        document.getElementById('totalPages').textContent = totalPages;
+                        document.getElementById('printEvenBtn').disabled = false;
+                        showStatus(`Auto-loaded ${filename}! Total pages: ${totalPages}`, 'success');
+                    });
+                })
+                .catch(err => {
+                    // File doesn't exist or can't be loaded, that's okay
+                    console.log('Default PDF not found, user can load manually');
+                });
+        }
+
+        function loadPDF() {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.pdf';
+            input.multiple = true; // Enable multiple selection
+            input.onchange = function(e) {
+                const files = Array.from(e.target.files);
+                if (files.length === 0) return;
+
+                if (files.length === 1) {
+                    // Single file - load directly
+                    const file = files[0];
+                    pdfFile = file;
+                    pdfUrl = URL.createObjectURL(file);
+                    displayPDF(pdfUrl);
+                    
+                    getPDFPageCount(file).then(pages => {
+                        totalPages = pages;
+                        document.getElementById('totalPages').textContent = totalPages;
+                        document.getElementById('printEvenBtn').disabled = false;
+                        showStatus(`PDF loaded successfully! Total pages: ${totalPages}`, 'success');
+                    });
+                    selectedFiles = [];
+                    updateFileList();
+                } else {
+                    // Multiple files - merge them
+                    selectedFiles = files;
+                    updateFileList();
+                    mergePDFs(files);
+                }
+            };
+            input.click();
+        }
+
+        function updateFileList() {
+            const fileListDiv = document.getElementById('fileList');
+            const selectedFilesDiv = document.getElementById('selectedFiles');
+            const fileCountSpan = document.getElementById('fileCount');
+
+            if (selectedFiles.length === 0) {
+                selectedFilesDiv.classList.remove('show');
+                return;
+            }
+
+            selectedFilesDiv.classList.add('show');
+            fileCountSpan.textContent = selectedFiles.length;
+            fileListDiv.innerHTML = '';
+
+            selectedFiles.forEach((file, index) => {
+                const tag = document.createElement('div');
+                tag.className = 'file-tag';
+                tag.innerHTML = `
+                    <span>${file.name}</span>
+                    <span class="remove" onclick="removeFile(${index})">×</span>
+                `;
+                fileListDiv.appendChild(tag);
+            });
+        }
+
+        function removeFile(index) {
+            selectedFiles.splice(index, 1);
+            updateFileList();
+            if (selectedFiles.length > 0) {
+                mergePDFs(selectedFiles);
+            } else {
+                selectedFiles = [];
+                pdfFile = null;
+                pdfUrl = null;
+                document.getElementById('pdfViewer').style.display = 'none';
+                document.getElementById('placeholder').style.display = 'block';
+                document.getElementById('printEvenBtn').disabled = true;
+                document.getElementById('printOddBtn').disabled = true;
+                document.getElementById('totalPages').textContent = '-';
+            }
+        }
+
+        async function mergePDFs(files) {
+            if (!checkPdfLib() && typeof PDFLib === 'undefined') {
+                showStatus('PDF library not loaded. Please refresh the page.', 'error');
+                return;
+            }
+            
+            const lib = pdfLib || PDFLib;
+            if (!lib) {
+                showStatus('PDF library not available. Please refresh the page.', 'error');
+                return;
+            }
+
+            showStatus('Merging PDFs... This may take a moment.', 'info');
+            const progressBar = document.getElementById('progressBar');
+            const progressFill = document.getElementById('progressFill');
+            progressBar.classList.add('show');
+
+            try {
+                const mergedPdf = await lib.PDFDocument.create();
+                let totalPagesAdded = 0;
+                let blankPagesAdded = 0;
+
+                for (let i = 0; i < files.length; i++) {
+                    const file = files[i];
+                    progressFill.style.width = `${((i + 1) / files.length) * 100}%`;
+                    
+                    const fileBytes = await file.arrayBuffer();
+                    const pdf = await lib.PDFDocument.load(fileBytes);
+                    const pages = pdf.getPages();
+                    const numPages = pages.length;
+
+                    // Add all pages from this PDF
+                    for (let j = 0; j < numPages; j++) {
+                        const [copiedPage] = await mergedPdf.copyPages(pdf, [j]);
+                        mergedPdf.addPage(copiedPage);
+                        totalPagesAdded++;
+                    }
+
+                    // Check if total pages is odd, add blank page if needed
+                    if (totalPagesAdded % 2 === 1) {
+                        const lastPage = pages[pages.length - 1];
+                        const { width, height } = lastPage.getSize();
+                        const blankPage = mergedPdf.addPage([width, height]);
+                        totalPagesAdded++;
+                        blankPagesAdded++;
+                    }
+                }
+
+                // Generate merged PDF
+                const mergedPdfBytes = await mergedPdf.save();
+                const mergedBlob = new Blob([mergedPdfBytes], { type: 'application/pdf' });
+                
+                pdfFile = new File([mergedBlob], 'merged.pdf', { type: 'application/pdf' });
+                pdfUrl = URL.createObjectURL(mergedBlob);
+                displayPDF(pdfUrl);
+
+                totalPages = totalPagesAdded;
+                document.getElementById('totalPages').textContent = totalPages;
+                document.getElementById('printEvenBtn').disabled = false;
+                
+                progressBar.classList.remove('show');
+                progressFill.style.width = '0%';
+
+                const statusMsg = `Successfully merged ${files.length} PDF(s)! Total pages: ${totalPages}`;
+                const blankMsg = blankPagesAdded > 0 ? ` (${blankPagesAdded} blank page(s) added for even pages)` : '';
+                showStatus(statusMsg + blankMsg, 'success');
+            } catch (error) {
+                progressBar.classList.remove('show');
+                progressFill.style.width = '0%';
+                showStatus(`Error merging PDFs: ${error.message}`, 'error');
+                console.error('Merge error:', error);
+            }
+        }
+
+        function displayPDF(url) {
+            const iframe = document.getElementById('pdfViewer');
+            const placeholder = document.getElementById('placeholder');
+            
+            iframe.src = url;
+            iframe.style.display = 'block';
+            placeholder.style.display = 'none';
+        }
+
+        async function getPDFPageCount(file) {
+            // Check if pdf-lib is available
+            if (!checkPdfLib() && typeof PDFLib === 'undefined') {
+                // Fallback method if pdf-lib not loaded
+                return new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        const arrayBuffer = e.target.result;
+                        const uint8Array = new Uint8Array(arrayBuffer);
+                        const text = new TextDecoder('latin1').decode(uint8Array);
+                        
+                        // Try multiple methods to find page count
+                        // Method 1: Look for /Count in page tree
+                        const countMatches = text.match(/\/Count\s+(\d+)/g);
+                        if (countMatches) {
+                            // Get the largest count (usually the root count)
+                            const counts = countMatches.map(m => parseInt(m.match(/\d+/)[0]));
+                            const maxCount = Math.max(...counts);
+                            if (maxCount > 0) {
+                                resolve(maxCount);
+                                return;
+                            }
+                        }
+                        
+                        // Method 2: Count /Page objects more carefully
+                        const pageMatches = text.match(/\/Type\s*\/Page[^s]/g);
+                        if (pageMatches) {
+                            resolve(pageMatches.length);
+                            return;
+                        }
+                        
+                        // Method 3: Count page objects in a different way
+                        const pageObjMatches = text.match(/\/Type\s*\/Page\b/g);
+                        if (pageObjMatches) {
+                            resolve(pageObjMatches.length);
+                            return;
+                        }
+                        
+                        resolve(1); // Default fallback
+                    };
+                    reader.onerror = reject;
+                    reader.readAsArrayBuffer(file);
+                });
+            }
+            
+            // Use pdf-lib for accurate page count
+            try {
+                const lib = pdfLib || PDFLib;
+                if (!lib) {
+                    throw new Error('pdf-lib not available');
+                }
+                const fileBytes = await file.arrayBuffer();
+                const pdf = await lib.PDFDocument.load(fileBytes);
+                const pages = pdf.getPages();
+                return pages.length;
+            } catch (error) {
+                console.error('Error counting pages with pdf-lib:', error);
+                // Fallback to regex method
+                return new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        const arrayBuffer = e.target.result;
+                        const uint8Array = new Uint8Array(arrayBuffer);
+                        const text = new TextDecoder('latin1').decode(uint8Array);
+                        const countMatches = text.match(/\/Count\s+(\d+)/g);
+                        if (countMatches) {
+                            const counts = countMatches.map(m => parseInt(m.match(/\d+/)[0]));
+                            resolve(Math.max(...counts));
+                        } else {
+                            const pageMatches = text.match(/\/Type\s*\/Page\b/g);
+                            resolve(pageMatches ? pageMatches.length : 1);
+                        }
+                    };
+                    reader.onerror = reject;
+                    reader.readAsArrayBuffer(file);
+                });
+            }
+        }
+
+        function generatePageRange(isEven) {
+            if (isEven) {
+                // Even pages: 2, 4, 6, 8, ...
+                const pages = [];
+                for (let i = 2; i <= totalPages; i += 2) {
+                    pages.push(i);
+                }
+                return pages.join(',');
+            } else {
+                // Odd pages: 1, 3, 5, 7, ...
+                const pages = [];
+                for (let i = 1; i <= totalPages; i += 2) {
+                    pages.push(i);
+                }
+                return pages.join(',');
+            }
+        }
+
+        function printEvenPages() {
+            if (!pdfFile || !pdfUrl) {
+                showStatus('Please load a PDF file first!', 'error');
+                return;
+            }
+
+            printStage = 'printing_even';
+            document.getElementById('currentStage').textContent = 'Printing Even Pages...';
+            
+            const pageRange = generatePageRange(true);
+            const instructionDiv = document.getElementById('printInstructions');
+            document.getElementById('pageRangeInstruction').innerHTML = 
+                `Enter: <code>${pageRange}</code><br>Or use range: <code>2-${totalPages}:2</code> (if supported)`;
+            instructionDiv.classList.add('show');
+            
+            // Open PDF in new window for printing
+            const printWindow = window.open(pdfUrl, '_blank');
+            
+            if (printWindow) {
+                printWindow.onload = function() {
+                    setTimeout(() => {
+                        printWindow.focus();
+                        // Show instructions before printing
+                        showStatus(`Print dialog will open. Use page range: ${pageRange.substring(0, 50)}...`, 'info');
+                        
+                        // Trigger print after a short delay
+                        setTimeout(() => {
+                            printWindow.print();
+                            
+                            // After print dialog, show flip dialog
+                            setTimeout(() => {
+                                printWindow.close();
+                                showFlipDialog();
+                            }, 2000);
+                        }, 1000);
+                    }, 500);
+                };
+            } else {
+                // Popup blocked, use iframe method
+                printUsingIframe(true, pageRange);
+            }
+        }
+
+        function printOddPages() {
+            if (!pdfFile || !pdfUrl) {
+                showStatus('Please load a PDF file first!', 'error');
+                return;
+            }
+
+            if (printStage !== 'even_printed') {
+                showStatus('Please print even pages first!', 'error');
+                return;
+            }
+
+            printStage = 'printing_odd';
+            document.getElementById('currentStage').textContent = 'Printing Odd Pages...';
+            
+            const pageRange = generatePageRange(false);
+            const instructionDiv = document.getElementById('printInstructions');
+            document.getElementById('pageRangeInstruction').innerHTML = 
+                `Enter: <code>${pageRange}</code><br>Or use range: <code>1-${totalPages}:2</code> (if supported)`;
+            instructionDiv.classList.add('show');
+            
+            const printWindow = window.open(pdfUrl, '_blank');
+            
+            if (printWindow) {
+                printWindow.onload = function() {
+                    setTimeout(() => {
+                        printWindow.focus();
+                        showStatus(`Print dialog will open. Use page range: ${pageRange.substring(0, 50)}...`, 'info');
+                        
+                        setTimeout(() => {
+                            printWindow.print();
+                            
+                            setTimeout(() => {
+                                printWindow.close();
+                                printStage = 'complete';
+                                document.getElementById('currentStage').textContent = 'Complete!';
+                                document.getElementById('printOddBtn').disabled = true;
+                                instructionDiv.classList.remove('show');
+                                showStatus('Printing complete! Your double-sided document is ready.', 'success');
+                            }, 2000);
+                        }, 1000);
+                    }, 500);
+                };
+            } else {
+                printUsingIframe(false, pageRange);
+            }
+        }
+
+        function printUsingIframe(isEven, pageRange) {
+            const iframe = document.createElement('iframe');
+            iframe.style.display = 'none';
+            iframe.src = pdfUrl;
+            document.body.appendChild(iframe);
+            
+            iframe.onload = function() {
+                setTimeout(() => {
+                    iframe.contentWindow.focus();
+                    showStatus(`In print dialog, select pages: ${pageRange.substring(0, 50)}...`, 'info');
+                    iframe.contentWindow.print();
+                    
+                    if (isEven) {
+                        setTimeout(() => {
+                            document.body.removeChild(iframe);
+                            showFlipDialog();
+                        }, 2000);
+                    } else {
+                        setTimeout(() => {
+                            document.body.removeChild(iframe);
+                            printStage = 'complete';
+                            document.getElementById('currentStage').textContent = 'Complete!';
+                            document.getElementById('printOddBtn').disabled = true;
+                            document.getElementById('printInstructions').classList.remove('show');
+                            showStatus('Printing complete! Your double-sided document is ready.', 'success');
+                        }, 2000);
+                    }
+                }, 500);
+            };
+        }
+
+        function showFlipDialog() {
+            document.getElementById('flipDialog').classList.add('show');
+            document.getElementById('printInstructions').classList.remove('show');
+        }
+
+        function confirmFlip() {
+            document.getElementById('flipDialog').classList.remove('show');
+            printStage = 'even_printed';
+            document.getElementById('currentStage').textContent = 'Even Pages Printed - Ready for Odd Pages';
+            document.getElementById('printOddBtn').disabled = false;
+            showStatus('Even pages printed. Please flip pages and click "Print Odd Pages" when ready.', 'info');
+        }
+
+        function cancelFlip() {
+            document.getElementById('flipDialog').classList.remove('show');
+            printStage = 'ready';
+            document.getElementById('currentStage').textContent = 'Ready';
+        }
+
+        function showStatus(message, type = 'info') {
+            const statusDiv = document.getElementById('status');
+            statusDiv.textContent = message;
+            statusDiv.className = `status ${type} show`;
+            
+            setTimeout(() => {
+                statusDiv.classList.remove('show');
+            }, 8000);
+        }
+    </script>
+</body>
+</html>
