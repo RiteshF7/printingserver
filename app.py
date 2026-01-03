@@ -7,6 +7,7 @@ from flask_cors import CORS
 import os
 import json
 from pdf_processor import process_pdf, print_pdf
+from printer_reverse import reverse_page, manual_reverse_instructions
 import logging
 
 app = Flask(__name__)
@@ -93,6 +94,27 @@ def print_pdf_endpoint():
     
     except Exception as e:
         logger.error(f"Error printing PDF: {str(e)}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/reverse', methods=['POST'])
+def reverse_page_endpoint():
+    """Handle page reverse/retract requests"""
+    try:
+        data = request.json
+        printer_name = data.get('printer_name')
+        copies = data.get('copies', 1)
+        
+        # Attempt to reverse the page
+        success = reverse_page(printer_name, copies)
+        
+        return jsonify({
+            'success': success,
+            'message': 'Reverse command sent' if success else 'Manual reverse required - see instructions'
+        })
+    
+    except Exception as e:
+        logger.error(f"Error reversing page: {str(e)}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 

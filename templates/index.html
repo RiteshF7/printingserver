@@ -173,6 +173,17 @@
             box-shadow: 0 5px 15px rgba(237, 137, 54, 0.4);
         }
 
+        .btn-reverse {
+            background: #4299e1;
+            color: white;
+        }
+
+        .btn-reverse:hover:not(:disabled) {
+            background: #3182ce;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(66, 153, 225, 0.4);
+        }
+
         .console {
             margin-top: 30px;
             background: #1a1a1a;
@@ -293,6 +304,9 @@
                 <button class="btn btn-phase1" id="btnPhase1" disabled>
                     🖨️ Start Phase 1 (Print Odd Pages)
                 </button>
+                <button class="btn btn-reverse" id="btnReverse" disabled title="Enable after Phase 1 printing completes">
+                    ⏪ Reverse Page (After Phase 1)
+                </button>
                 <button class="btn btn-phase2" id="btnPhase2" disabled>
                     🖨️ Start Phase 2 (Print Even Pages)
                 </button>
@@ -313,6 +327,7 @@
         const consoleDiv = document.getElementById('console');
         const btnPhase1 = document.getElementById('btnPhase1');
         const btnPhase2 = document.getElementById('btnPhase2');
+        const btnReverse = document.getElementById('btnReverse');
         const printerNameInput = document.getElementById('printerName');
 
         // File input change
@@ -360,6 +375,7 @@
                     showStatus('PDF processed successfully!', 'success');
                     btnPhase1.disabled = false;
                     btnPhase2.disabled = false;
+                    // Reverse button will be enabled after Phase 1 completes
                     logToConsole('PDF Processing Complete');
                     logToConsole(`Total pages: ${data.page_info.total_pages}`);
                     logToConsole(`Original sequence: ${data.page_info.original_sequence.join(', ')}`);
@@ -456,6 +472,9 @@
                 if (data.success) {
                     showStatus('Phase 1 print job sent successfully!', 'success');
                     logToConsole('✓ Print job sent successfully');
+                    // Enable reverse button after Phase 1 completes
+                    btnReverse.disabled = false;
+                    logToConsole('Reverse button enabled - you can now reverse pages if needed');
                 } else {
                     showStatus('Error: ' + data.error, 'error');
                     logToConsole('✗ Error: ' + data.error);
@@ -466,6 +485,47 @@
                 showStatus('Error: ' + error.message, 'error');
                 logToConsole('✗ Error: ' + error.message);
                 btnPhase1.disabled = false;
+            });
+        });
+
+        btnReverse.addEventListener('click', () => {
+            const printerName = printerNameInput.value.trim() || null;
+            logToConsole('\n=== Attempting Page Reverse/Retract ===');
+            logToConsole('Sending reverse command to printer...');
+            
+            showStatus('Attempting to reverse page...', 'info');
+            btnReverse.disabled = true;
+
+            fetch('/reverse', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    printer_name: printerName,
+                    copies: 1
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    showStatus('Reverse command sent successfully!', 'success');
+                    logToConsole('✓ Reverse command sent');
+                    logToConsole('Page should be retracted back to input tray');
+                } else {
+                    showStatus('Manual reverse required - see console for instructions', 'info');
+                    logToConsole('⚠ Automatic reverse not available');
+                    logToConsole('Manual steps:');
+                    logToConsole('1. Remove printed pages from output tray');
+                    logToConsole('2. Place them back in input tray (same order, top first)');
+                    logToConsole('3. Continue with Phase 2 printing');
+                }
+                btnReverse.disabled = false;
+            })
+            .catch(error => {
+                showStatus('Error: ' + error.message, 'error');
+                logToConsole('✗ Error: ' + error.message);
+                btnReverse.disabled = false;
             });
         });
 
