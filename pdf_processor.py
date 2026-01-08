@@ -18,14 +18,31 @@ from reportlab.lib.units import inch
 
 
 def clone_page(page):
-    """Create a deep copy of a PDF page to avoid modifying the original."""
+    """Create a deep copy of a PDF page to avoid modifying the original.
+    Preserves rotation and other page attributes."""
+    # Get rotation before cloning
+    original_rotation = page.get('/Rotate', 0)
+    
     temp_writer = PdfWriter()
     temp_writer.add_page(page)
     temp_buffer = io.BytesIO()
     temp_writer.write(temp_buffer)
     temp_buffer.seek(0)
     temp_reader = PdfReader(temp_buffer)
-    return temp_reader.pages[0]
+    cloned_page = temp_reader.pages[0]
+    
+    # Ensure rotation is preserved - if rotation was lost, re-apply it
+    cloned_rotation = cloned_page.get('/Rotate', 0)
+    if cloned_rotation != original_rotation and original_rotation != 0:
+        # Re-apply rotation if it was lost during cloning
+        current_rotation = cloned_page.get('/Rotate', 0)
+        if current_rotation != original_rotation:
+            # Calculate needed rotation
+            needed_rotation = (original_rotation - current_rotation) % 360
+            if needed_rotation != 0:
+                cloned_page.rotate(needed_rotation)
+    
+    return cloned_page
 
 
 def create_title_page(filename, page_size=(612, 792), image_path="frontpage.png"):
@@ -256,7 +273,9 @@ def split_pdf_into_chunks(pdf_path, chunk_size=20, output_dir="."):
         writer = PdfWriter()
         
         for page_num in range(start_page, end_page):
-            writer.add_page(reader.pages[page_num])
+            # Clone page to ensure rotations and other metadata are preserved
+            page = clone_page(reader.pages[page_num])
+            writer.add_page(page)
         
         chunk_filename = f"{base_name}_part_{chunk_idx + 1}_of_{num_chunks}.pdf"
         chunk_path = os.path.join(output_dir, chunk_filename)
@@ -397,6 +416,214 @@ def add_page_watermark(page, original_page_num, original_filename, is_rotated=Fa
         return page
 
 
+def preprocess_pdf(input_path, remove_first_last=True):
+    """
+    Pre-process a PDF: remove first/last pages, add title page, ensure even count.
+    This does NOT split into odd/even or apply rotations.
+    
+    Args:
+        input_path: Path to input PDF file
+        remove_first_last: Whether to remove first and last pages (default: True)
+    
+    Returns:
+        tuple: (preprocessed_PdfReader, original_page_map, original_filename, original_total_pages, removed_first, removed_last)
+               original_page_map: Maps current page index to original page number (0 for title/blank pages)
+    """
+    # Get original filename for title page
+    original_filename = os.path.basename(input_path)
+    
+    # Read the input PDF
+    original_reader = PdfReader(input_path)
+    original_total_pages = len(original_reader.pages)
+    
+    print(f"Total pages in input PDF: {original_total_pages}")
+    
+    # Map to track original page numbers
+    original_page_map = {}
+    removed_first = None
+    removed_last = None
+    
+    # Step 0a: Remove first and last pages if requested
+    if remove_first_last:
+        print("\nStep 0a: Removing first and last pages...")
+        reader, removed_first, removed_last = remove_first_last_pages(input_path)
+        if reader is None:
+            # PDF had 2 or fewer pages, use original
+            reader = original_reader
+            total_pages = original_total_pages
+            # Map all pages to themselves
+            for i in range(total_pages):
+                original_page_map[i] = i + 1
+        else:
+            total_pages = len(reader.pages)
+            # Create mapping: new page index -> original page number
+            for i in range(total_pages):
+                original_page_map[i] = i + 2  # +2 because we removed page 1
+        print(f"Pages after removal: {total_pages}")
+    else:
+        reader = original_reader
+        total_pages = original_total_pages
+        # Map all pages to themselves
+        for i in range(total_pages):
+            original_page_map[i] = i + 1
+    
+    # Step 0b: Add title page at the front
+    print("\nStep 0b: Adding title page with image and filename...")
+    pages_before_title = total_pages
+    # Look for frontpage.png
+    image_path = "frontpage.png"
+    if not os.path.exists(image_path):
+        image_path = os.path.join(os.path.dirname(input_path), "frontpage.png")
+        if not os.path.exists(image_path):
+            image_path = os.path.join(os.path.dirname(os.path.dirname(input_path)), "frontpage.png")
+    if os.path.exists(image_path):
+        print(f"  - Using image: {image_path}")
+    
+    reader = add_title_page_to_pdf(reader, original_filename, image_path=image_path)
+    total_pages = len(reader.pages)
+    
+    # Update page mapping to account for title page (inserted at index 0)
+    new_original_page_map = {0: 0}  # Title page maps to 0
+    for i in range(1, total_pages):
+        old_index = i - 1
+        if old_index < pages_before_title:
+            if old_index in original_page_map:
+                new_original_page_map[i] = original_page_map[old_index]
+            else:
+                new_original_page_map[i] = old_index + 1
+        else:
+            new_original_page_map[i] = 0
+    original_page_map = new_original_page_map
+    
+    print(f"Pages after adding title page: {total_pages}")
+    
+    # Step 0c: Ensure even page count
+    print("\nStep 0c: Ensuring even page count...")
+    pages_before_even = total_pages
+    reader = ensure_even_page_count(reader)
+    total_pages = len(reader.pages)
+    
+    if total_pages > pages_before_even:
+        print(f"  - Added blank page to make even count (now {total_pages} pages)")
+        # Update mapping for blank page (last page)
+        blank_page_index = total_pages - 1
+        original_page_map[blank_page_index] = 0
+    else:
+        print(f"  - Already even ({total_pages} pages)")
+    
+    return reader, original_page_map, original_filename, original_total_pages, removed_first, removed_last
+
+
+def process_reader_into_odd_even(reader, original_page_map, original_filename_or_map, output_dir, add_watermarks=True):
+    """
+    Process a PdfReader into odd and even PDFs for duplex printing.
+    
+    Args:
+        reader: PdfReader object with preprocessed pages
+        original_page_map: Dictionary mapping page index to (original_page_num, filename) tuple or just original_page_num
+        original_filename_or_map: Either a string filename or the page_map itself (if it contains filename tuples)
+        output_dir: Directory to save output PDFs
+        add_watermarks: Whether to add watermarks (default: True)
+    
+    Returns:
+        tuple: (odd_pages_path, even_pages_path)
+    """
+    # Handle both cases: page_map with (page_num, filename) tuples or just page numbers
+    # If original_filename_or_map is a string, it's a filename; otherwise it's the page_map
+    if isinstance(original_filename_or_map, str):
+        # Simple case: single filename for all pages
+        get_filename = lambda idx: original_filename_or_map
+        get_page_num = lambda idx: original_page_map.get(idx, idx + 1)
+    else:
+        # Complex case: page_map contains (page_num, filename) tuples
+        get_filename = lambda idx: original_page_map.get(idx, (idx + 1, "unknown"))[1] if isinstance(original_page_map.get(idx, (idx + 1, "unknown")), tuple) else "unknown"
+        get_page_num = lambda idx: original_page_map.get(idx, (idx + 1, "unknown"))[0] if isinstance(original_page_map.get(idx, (idx + 1, "unknown")), tuple) else original_page_map.get(idx, idx + 1)
+    total_pages = len(reader.pages)
+    
+    # Initialize writers for odd and even pages
+    odd_writer = PdfWriter()
+    even_writer = PdfWriter()
+    
+    # Track page order information
+    odd_pages_order = []
+    even_pages_order = []
+    
+    # Split pages into odd and even
+    print("Step 1: Splitting pages into odd and even...")
+    for i in range(total_pages):
+        page_num = i + 1  # 1-indexed page number
+        original_page_num = get_page_num(i)  # Original page number (0 for title/blank)
+        
+        if page_num % 2 == 1:  # Odd page (1-indexed)
+            odd_pages_order.append((i, original_page_num))
+        else:  # Even page
+            even_pages_order.append((i, original_page_num))
+    
+    print(f"  - Odd pages found: {len(odd_pages_order)} pages")
+    print(f"  - Even pages found: {len(even_pages_order)} pages\n")
+    
+    # Step 2: Add odd pages in REVERSE order
+    print("Step 2: Adding odd pages in REVERSE order...")
+    if add_watermarks:
+        print("  (Adding watermarks: original page number and filename)")
+    
+    for i in range(len(odd_pages_order) - 1, -1, -1):
+        page_index, original_page_num = odd_pages_order[i]
+        page = clone_page(reader.pages[page_index])
+        
+        if add_watermarks and original_page_num > 0:
+            filename = get_filename(page_index)
+            page = add_page_watermark(page, original_page_num, filename, is_rotated=False)
+        
+        odd_writer.add_page(page)
+        if original_page_num > 0:
+            print(f"  - Added original page {original_page_num} (position {len(odd_pages_order) - i} in output)")
+        elif page_index == 0:
+            print(f"  - Added title page (position {len(odd_pages_order) - i} in output)")
+        else:
+            print(f"  - Added blank page (position {len(odd_pages_order) - i} in output)")
+    
+    print(f"\n  Final odd pages order: {len(odd_pages_order)} pages\n")
+    
+    # Step 3: Add even pages in NORMAL order, rotated 180 degrees
+    print("Step 3: Adding even pages in NORMAL order, rotated 180°...")
+    if add_watermarks:
+        print("  (Adding watermarks: original page number and filename)")
+    
+    for page_index, original_page_num in even_pages_order:
+        page = clone_page(reader.pages[page_index])
+        
+        if original_page_num > 0:
+            page.rotate(180)
+        
+        if add_watermarks and original_page_num > 0:
+            filename = get_filename(page_index)
+            page = add_page_watermark(page, original_page_num, filename, is_rotated=True)
+        
+        even_writer.add_page(page)
+        if original_page_num > 0:
+            print(f"  - Added original page {original_page_num} (rotated 180°)")
+        else:
+            print(f"  - Added blank/title page (no rotation)")
+    
+    print(f"\n  Final even pages order: {len(even_pages_order)} pages\n")
+    
+    # Save output PDFs
+    odd_output_path = os.path.join(output_dir, "odd_pages.pdf")
+    even_output_path = os.path.join(output_dir, "even_pages_rotated.pdf")
+    
+    print("Step 4: Saving output PDFs...")
+    with open(odd_output_path, 'wb') as f:
+        odd_writer.write(f)
+    print(f"  - Saved: {odd_output_path}")
+    
+    with open(even_output_path, 'wb') as f:
+        even_writer.write(f)
+    print(f"  - Saved: {even_output_path}\n")
+    
+    return odd_output_path, even_output_path
+
+
 def process_pdf(input_path, output_dir=".", add_watermarks=True, remove_first_last=True):
     """
     Process PDF for duplex printing workflow.
@@ -504,96 +731,17 @@ def process_pdf(input_path, output_dir=".", add_watermarks=True, remove_first_la
     
     print(f"Pages to process: {total_pages}\n")
     
-    # Initialize writers for odd and even pages
-    odd_writer = PdfWriter()
-    even_writer = PdfWriter()
-    
-    # Track page order information
-    odd_pages_order = []
-    even_pages_order = []
-    
-    # Split pages into odd and even
-    print("Step 1: Splitting pages into odd and even...")
-    for i in range(total_pages):
-        page_num = i + 1  # 1-indexed page number in processed PDF
-        original_page_num = original_page_map[i]  # Original page number from source PDF (0 for title/blank pages)
-        page = reader.pages[i]
-        
-        if page_num % 2 == 1:  # Odd page (1-indexed)
-            odd_pages_order.append((i, original_page_num))  # Store (index, original_page_num) tuple
-        else:  # Even page
-            even_pages_order.append((i, original_page_num))  # Store (index, original_page_num) tuple
-    
-    print(f"  - Odd pages found: {len(odd_pages_order)} pages")
-    print(f"  - Even pages found: {len(even_pages_order)} pages\n")
-    
-    # Step 2: Add odd pages in REVERSE order (so page 1 ends up on top)
-    print("Step 2: Adding odd pages in REVERSE order...")
-    if add_watermarks:
-        print("  (Adding watermarks: original page number and filename)")
-    
-    for i in range(len(odd_pages_order) - 1, -1, -1):
-        page_index, original_page_num = odd_pages_order[i]  # Unpack (index, original_page_num)
-        # Clone the page to avoid modifying the original
-        page = clone_page(reader.pages[page_index])
-        
-        # Add watermark if enabled (skip watermark for title/blank pages where original_page_num is 0)
-        if add_watermarks and original_page_num > 0:
-            page = add_page_watermark(page, original_page_num, original_filename, is_rotated=False)
-        elif original_page_num == 0 and page_index == 0:
-            # Title page - don't add watermark (or add special title watermark if desired)
-            pass
-        
-        odd_writer.add_page(page)
-        if original_page_num > 0:
-            print(f"  - Added original page {original_page_num} (position {len(odd_pages_order) - i} in output)")
-        elif page_index == 0:
-            print(f"  - Added title page (position {len(odd_pages_order) - i} in output)")
-        else:
-            print(f"  - Added blank page (position {len(odd_pages_order) - i} in output)")
-    
-    print(f"\n  Final odd pages order: {len(odd_pages_order)} pages\n")
-    
-    # Step 3: Add even pages in NORMAL order, rotated 180 degrees
-    print("Step 3: Adding even pages in NORMAL order, rotated 180°...")
-    if add_watermarks:
-        print("  (Adding watermarks: original page number and filename)")
-    
-    for page_index, original_page_num in even_pages_order:
-        # Clone the page to avoid modifying the original
-        page = clone_page(reader.pages[page_index])
-        
-        # Rotate page by 180 degrees (skip rotation for title/blank pages)
-        if original_page_num > 0:
-            page.rotate(180)
-        
-        # Add watermark if enabled (after rotation, skip watermark for title/blank pages)
-        if add_watermarks and original_page_num > 0:
-            page = add_page_watermark(page, original_page_num, original_filename, is_rotated=True)
-        
-        even_writer.add_page(page)
-        if original_page_num > 0:
-            print(f"  - Added original page {original_page_num} (rotated 180°)")
-        else:
-            print(f"  - Added blank/title page (no rotation)")
-    
-    print(f"\n  Final even pages order: {len(even_pages_order)} pages\n")
-    
-    # Save output PDFs
-    odd_output_path = os.path.join(output_dir, "odd_pages.pdf")
-    even_output_path = os.path.join(output_dir, "even_pages_rotated.pdf")
-    
-    print("Step 4: Saving output PDFs...")
-    with open(odd_output_path, 'wb') as f:
-        odd_writer.write(f)
-    print(f"  - Saved: {odd_output_path}")
-    
-    with open(even_output_path, 'wb') as f:
-        even_writer.write(f)
-    print(f"  - Saved: {even_output_path}\n")
+    # Process into odd and even PDFs
+    odd_output_path, even_output_path = process_reader_into_odd_even(
+        reader, original_page_map, original_filename, output_dir, add_watermarks
+    )
     
     # Create page info dictionary (using original page numbers)
     all_original_pages = sorted([p for p in original_page_map.values() if p > 0])  # Exclude title/blank pages
+    # Calculate odd/even counts (total_pages is even after ensure_even_page_count)
+    odd_pages_count = (total_pages + 1) // 2  # Ceiling division for odd pages
+    even_pages_count = total_pages // 2  # Floor division for even pages
+    
     page_info = {
         'total_pages': total_pages,
         'original_total_pages': original_total_pages,
@@ -601,8 +749,8 @@ def process_pdf(input_path, output_dir=".", add_watermarks=True, remove_first_la
         'removed_first_page': removed_first,
         'removed_last_page': removed_last,
         'has_title_page': True,
-        'odd_pages_count': len(odd_pages_order),
-        'even_pages_count': len(even_pages_order),
+        'odd_pages_count': odd_pages_count,
+        'even_pages_count': even_pages_count,
         'odd_output': odd_output_path,
         'even_output': even_output_path
     }
@@ -616,12 +764,14 @@ def process_pdf(input_path, output_dir=".", add_watermarks=True, remove_first_la
 
 def process_multiple_pdfs(input_paths, output_dir=".", add_watermarks=True, remove_first_last=True):
     """
-    Process multiple PDFs for duplex printing workflow and merge them.
+    Process multiple PDFs for duplex printing workflow.
     
-    This function:
-    1. Processes each PDF individually (splits odd/even, reverses odd, rotates even)
-    2. Merges all odd pages PDFs into one
-    3. Merges all even pages PDFs into one
+    NEW WORKFLOW:
+    1. Pre-process each PDF (remove first/last, add title page, ensure even count)
+    2. Merge all pre-processed PDFs into one
+    3. Process merged PDF (split odd/even, reverse odd, rotate even)
+    4. Combine odd and even pages
+    5. Split into chunks
     
     Args:
         input_paths: List of paths to input PDF files
@@ -630,7 +780,7 @@ def process_multiple_pdfs(input_paths, output_dir=".", add_watermarks=True, remo
         remove_first_last: Whether to remove first and last pages from each PDF (default: True)
     
     Returns:
-        tuple: (merged_odd_pages_path, merged_even_pages_path, combined_page_info)
+        tuple: (merged_combined_path, merged_combined_path, combined_page_info)
     """
     import tempfile
     import shutil
@@ -639,79 +789,91 @@ def process_multiple_pdfs(input_paths, output_dir=".", add_watermarks=True, remo
     print(f"Processing {len(input_paths)} PDF files for batch processing")
     print(f"{'='*60}\n")
     
-    # Create temporary directory for individual processed PDFs
+    # Create temporary directory for preprocessed PDFs
     temp_dir = tempfile.mkdtemp(prefix="pdf_batch_")
     
     try:
-        all_odd_writers = []
-        all_even_writers = []
         combined_page_info = {
             'total_pages': 0,
             'original_sequence': [],
             'files_processed': []
         }
         
-        # Process each PDF
+        # Step 0: Pre-process each PDF (remove first/last, add title, ensure even)
+        preprocessed_readers = []
+        merged_page_map = {}  # Maps page index in merged PDF to (original_page_num, filename)
+        current_page_index = 0
+        
         for file_idx, input_path in enumerate(input_paths):
             print(f"\n{'='*60}")
-            print(f"Processing file {file_idx + 1}/{len(input_paths)}: {os.path.basename(input_path)}")
+            print(f"Pre-processing file {file_idx + 1}/{len(input_paths)}: {os.path.basename(input_path)}")
             print(f"{'='*60}\n")
             
-            # Create unique output directory for this PDF to avoid filename conflicts
-            pdf_temp_dir = os.path.join(temp_dir, f"pdf_{file_idx}")
-            os.makedirs(pdf_temp_dir, exist_ok=True)
+            original_filename = os.path.basename(input_path)
             
-            # Process individual PDF
-            odd_path, even_path, page_info = process_pdf(input_path, pdf_temp_dir, add_watermarks=add_watermarks, remove_first_last=remove_first_last)
+            # Pre-process PDF (steps 0a, 0b, 0c)
+            if remove_first_last:
+                print("Step 0a: Removing first and last pages...")
+            reader, page_map, filename, original_total, removed_first, removed_last = preprocess_pdf(
+                input_path, remove_first_last=remove_first_last
+            )
             
-            # Read processed PDFs
-            odd_reader = PdfReader(odd_path)
-            even_reader = PdfReader(even_path)
+            total_pages = len(reader.pages)
+            print(f"Pages after pre-processing: {total_pages}\n")
             
-            # Track page numbers across all files
-            page_offset = combined_page_info['total_pages']
+            # Update merged page map
+            for i in range(total_pages):
+                original_page_num = page_map.get(i, i + 1)
+                merged_page_map[current_page_index + i] = (original_page_num, filename)
             
-            # Update combined page info
-            combined_page_info['total_pages'] += page_info['total_pages']
-            if 'original_sequence' in page_info:
-                combined_page_info['original_sequence'].extend([
-                    p + page_offset for p in page_info['original_sequence']
-                ])
-            
+            # Track info
+            combined_page_info['total_pages'] += total_pages
             combined_page_info['files_processed'].append({
-                'filename': os.path.basename(input_path),
-                'total_pages': page_info['total_pages'],
-                'odd_pages': page_info['odd_pages_count'],
-                'even_pages': page_info['even_pages_count']
+                'filename': filename,
+                'total_pages': total_pages,
+                'original_total_pages': original_total,
+                'removed_first': removed_first,
+                'removed_last': removed_last
             })
             
-            # Store readers for merging
-            all_odd_writers.append(odd_reader)
-            all_even_writers.append(even_reader)
+            preprocessed_readers.append(reader)
+            current_page_index += total_pages
         
-        # Merge all odd pages PDFs
+        # Step 0.5: Merge all preprocessed PDFs into one
         print(f"\n{'='*60}")
-        print("Merging all odd pages PDFs...")
+        print("Merging all preprocessed PDFs...")
         print(f"{'='*60}\n")
-        merged_odd_writer = PdfWriter()
-        for idx, odd_reader in enumerate(all_odd_writers):
-            print(f"  - Adding odd pages from file {idx + 1} ({len(odd_reader.pages)} pages)")
-            for page in odd_reader.pages:
-                merged_odd_writer.add_page(page)
         
-        # Merge all even pages PDFs
-        print(f"\n{'='*60}")
-        print("Merging all even pages PDFs...")
-        print(f"{'='*60}\n")
-        merged_even_writer = PdfWriter()
-        for idx, even_reader in enumerate(all_even_writers):
-            print(f"  - Adding even pages from file {idx + 1} ({len(even_reader.pages)} pages)")
-            for page in even_reader.pages:
-                merged_even_writer.add_page(page)
+        merged_writer = PdfWriter()
+        for idx, reader in enumerate(preprocessed_readers):
+            print(f"  - Adding pages from file {idx + 1} ({len(reader.pages)} pages)")
+            for page in reader.pages:
+                merged_writer.add_page(clone_page(page))
         
+        # Write merged PDF to temporary file
+        merged_temp_path = os.path.join(temp_dir, "merged_preprocessed.pdf")
+        with open(merged_temp_path, 'wb') as f:
+            merged_writer.write(f)
+        
+        merged_reader = PdfReader(merged_temp_path)
+        total_merged_pages = len(merged_reader.pages)
+        
+        print(f"\nMerged PDF created: {total_merged_pages} pages total\n")
+        
+        # Step 1-3: Process merged PDF (split odd/even, reverse odd, rotate even)
         print(f"\n{'='*60}")
-        print(f"Batch processing complete! Processed {len(input_paths)} files, {combined_page_info['total_pages']} total pages")
+        print("Processing merged PDF (split odd/even, reverse odd, rotate even)...")
         print(f"{'='*60}\n")
+        
+        # Process merged PDF into odd and even
+        # merged_page_map contains (page_num, filename) tuples
+        odd_output_path, even_output_path = process_reader_into_odd_even(
+            merged_reader, merged_page_map, merged_page_map, temp_dir, add_watermarks
+        )
+        
+        # Read odd and even PDFs
+        odd_reader = PdfReader(odd_output_path)
+        even_reader = PdfReader(even_output_path)
         
         # Step 4: Combine odd and even pages into a single PDF
         print(f"\n{'='*60}")
@@ -720,13 +882,39 @@ def process_multiple_pdfs(input_paths, output_dir=".", add_watermarks=True, remo
         
         combined_writer = PdfWriter()
         
-        # Add all odd pages first
-        for page in merged_odd_writer.pages:
-            combined_writer.add_page(page)
+        total_odd_pages = len(odd_reader.pages)
+        total_even_pages = len(even_reader.pages)
         
-        # Then add all even pages
-        for page in merged_even_writer.pages:
-            combined_writer.add_page(page)
+        # Add all odd pages first (already in reversed order)
+        print("Adding odd pages (reversed order)...")
+        page_counter = 0
+        for page in odd_reader.pages:
+            cloned_page = clone_page(page)
+            combined_writer.add_page(cloned_page)
+            page_counter += 1
+            rotation = cloned_page.get('/Rotate', 0)
+            if page_counter <= 3:  # Print first few
+                print(f"    Page {page_counter}: Rotation = {rotation}° (should be 0°)")
+        
+        print(f"  Total odd pages added: {page_counter}\n")
+        
+        # Then add all even pages (already rotated 180°)
+        print("Adding even pages (rotated 180°)...")
+        even_start_page = page_counter + 1
+        for page in even_reader.pages:
+            cloned_page = clone_page(page)
+            combined_writer.add_page(cloned_page)
+            page_counter += 1
+            rotation = cloned_page.get('/Rotate', 0)
+            if page_counter - even_start_page < 3:  # Print first few even pages
+                status = "OK" if rotation == 180 else "MISSING"
+                print(f"    Page {page_counter}: Rotation = {rotation} {status} (should be 180)")
+        
+        print(f"  Total even pages added: {page_counter - total_odd_pages}\n")
+        
+        print(f"\n{'='*60}")
+        print(f"Batch processing complete! Processed {len(input_paths)} files, {combined_page_info['total_pages']} total pages")
+        print(f"{'='*60}\n")
         
         # Save combined PDF
         combined_path = os.path.join(output_dir, "merged_combined.pdf")
@@ -736,12 +924,12 @@ def process_multiple_pdfs(input_paths, output_dir=".", add_watermarks=True, remo
         
         total_combined_pages = len(combined_writer.pages)
         print(f"  - Saved combined PDF: {combined_path} ({total_combined_pages} pages)")
-        print(f"    - Odd pages: {len(merged_odd_writer.pages)} pages")
-        print(f"    - Even pages: {len(merged_even_writer.pages)} pages\n")
+        print(f"    - Odd pages: {total_odd_pages} pages (reversed order)")
+        print(f"    - Even pages: {total_even_pages} pages (rotated 180°)\n")
         
         combined_page_info['combined_output'] = combined_path
-        combined_page_info['odd_pages_count'] = len(merged_odd_writer.pages)
-        combined_page_info['even_pages_count'] = len(merged_even_writer.pages)
+        combined_page_info['odd_pages_count'] = total_odd_pages
+        combined_page_info['even_pages_count'] = total_even_pages
         combined_page_info['total_combined_pages'] = total_combined_pages
         
         # Step 5: Split combined PDF into 20-page chunks
