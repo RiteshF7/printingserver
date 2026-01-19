@@ -64,6 +64,40 @@
             margin-top: 10px;
             font-size: 14px;
         }
+        .file-list {
+            margin-top: 10px;
+            max-height: 150px;
+            overflow-y: auto;
+            text-align: left;
+        }
+        .file-item {
+            padding: 8px;
+            margin: 5px 0;
+            background: #f9f9f9;
+            border-radius: 4px;
+            font-size: 13px;
+            color: #555;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .file-item .remove-btn {
+            background: #f5576c;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            padding: 4px 8px;
+            cursor: pointer;
+            font-size: 11px;
+        }
+        .file-item .remove-btn:hover {
+            background: #d43f52;
+        }
+        .file-count {
+            color: #667eea;
+            font-weight: bold;
+            margin-top: 5px;
+        }
         .features {
             margin-bottom: 20px;
         }
@@ -178,10 +212,12 @@
         <form id="uploadForm" enctype="multipart/form-data">
             <div class="upload-area" id="uploadArea">
                 <label for="pdfFile" class="file-label">
-                    📄 Click to choose PDF or drag & drop
+                    📄 Click to choose PDF(s) or drag & drop (Multiple files supported)
                 </label>
-                <input type="file" id="pdfFile" name="pdf" accept=".pdf" required>
+                <input type="file" id="pdfFile" name="pdf" accept=".pdf" multiple>
                 <div class="file-name" id="fileName"></div>
+                <div class="file-list" id="fileList"></div>
+                <div class="file-count" id="fileCount"></div>
             </div>
             
             <div class="features">
@@ -214,7 +250,7 @@
             </div>
             
             <input type="hidden" id="selectedFeature" name="feature" value="remove_first_last">
-            <button type="submit" id="submitBtn">Process PDF</button>
+            <button type="submit" id="submitBtn">Process PDF(s)</button>
             <div class="message" id="message"></div>
         </form>
     </div>
@@ -222,6 +258,8 @@
         const uploadArea = document.getElementById('uploadArea');
         const fileInput = document.getElementById('pdfFile');
         const fileName = document.getElementById('fileName');
+        const fileList = document.getElementById('fileList');
+        const fileCount = document.getElementById('fileCount');
         const form = document.getElementById('uploadForm');
         const submitBtn = document.getElementById('submitBtn');
         const message = document.getElementById('message');
@@ -246,48 +284,123 @@
             });
         });
 
-        uploadArea.addEventListener('click', () => fileInput.click());
-        
+        // Fix: Use mousedown instead of click to prevent conflicts
+        uploadArea.addEventListener('mousedown', (e) => {
+            if (e.target === uploadArea || e.target.classList.contains('file-label')) {
+                e.preventDefault();
+                fileInput.click();
+            }
+        });
+
+        // Improved drag and drop handlers
         uploadArea.addEventListener('dragover', (e) => {
             e.preventDefault();
+            e.stopPropagation();
             uploadArea.classList.add('dragover');
         });
         
-        uploadArea.addEventListener('dragleave', () => {
-            uploadArea.classList.remove('dragover');
+        uploadArea.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            // Only remove dragover if we're actually leaving the upload area
+            if (!uploadArea.contains(e.relatedTarget)) {
+                uploadArea.classList.remove('dragover');
+            }
         });
         
         uploadArea.addEventListener('drop', (e) => {
             e.preventDefault();
+            e.stopPropagation();
             uploadArea.classList.remove('dragover');
-            const files = e.dataTransfer.files;
-            if (files.length > 0 && files[0].type === 'application/pdf') {
-                fileInput.files = files;
-                updateFileName();
+            
+            const files = Array.from(e.dataTransfer.files).filter(file => 
+                file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
+            );
+            
+            if (files.length > 0) {
+                // Create a new FileList-like object
+                const dataTransfer = new DataTransfer();
+                files.forEach(file => dataTransfer.items.add(file));
+                fileInput.files = dataTransfer.files;
+                updateFileList();
             }
         });
 
-        fileInput.addEventListener('change', updateFileName);
+        // Fix: Properly handle file input change
+        fileInput.addEventListener('change', (e) => {
+            e.stopPropagation();
+            updateFileList();
+        });
 
-        function updateFileName() {
-            if (fileInput.files.length > 0) {
-                fileName.textContent = fileInput.files[0].name;
+        function updateFileList() {
+            const files = Array.from(fileInput.files);
+            fileList.innerHTML = '';
+            
+            if (files.length === 0) {
+                fileName.textContent = '';
+                fileCount.textContent = '';
+                return;
+            }
+            
+            if (files.length === 1) {
+                fileName.textContent = files[0].name;
+                fileCount.textContent = '';
             } else {
                 fileName.textContent = '';
+                fileCount.textContent = `${files.length} file(s) selected`;
+                
+                files.forEach((file, index) => {
+                    const fileItem = document.createElement('div');
+                    fileItem.className = 'file-item';
+                    fileItem.innerHTML = `
+                        <span>${file.name}</span>
+                        <button type="button" class="remove-btn" data-index="${index}">Remove</button>
+                    `;
+                    fileList.appendChild(fileItem);
+                });
+                
+                // Add remove button handlers
+                fileList.querySelectorAll('.remove-btn').forEach(btn => {
+                    btn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        const index = parseInt(btn.getAttribute('data-index'));
+                        removeFile(index);
+                    });
+                });
             }
+        }
+
+        function removeFile(index) {
+            const files = Array.from(fileInput.files);
+            files.splice(index, 1);
+            
+            // Create new FileList
+            const dataTransfer = new DataTransfer();
+            files.forEach(file => dataTransfer.items.add(file));
+            fileInput.files = dataTransfer.files;
+            
+            updateFileList();
         }
 
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
+            e.stopPropagation();
             
-            if (!fileInput.files.length) {
-                showMessage('Please select a PDF file', 'error');
+            if (!fileInput.files || fileInput.files.length === 0) {
+                showMessage('Please select at least one PDF file', 'error');
                 return;
             }
 
+            const files = Array.from(fileInput.files);
             const formData = new FormData(form);
+            
+            // Add all files to formData
+            files.forEach((file, index) => {
+                formData.append('pdf', file);
+            });
+            
             submitBtn.disabled = true;
-            submitBtn.textContent = 'Processing...';
+            submitBtn.textContent = files.length > 1 ? `Processing ${files.length} files...` : 'Processing...';
             message.style.display = 'none';
 
             try {
@@ -301,16 +414,26 @@
                     const url = window.URL.createObjectURL(blob);
                     const a = document.createElement('a');
                     a.href = url;
-                    a.download = 'processed_' + fileInput.files[0].name;
+                    
+                    // Determine download name based on number of files
+                    if (files.length === 1) {
+                        a.download = 'processed_' + files[0].name;
+                    } else {
+                        a.download = 'processed_pdfs.zip';
+                    }
+                    
                     document.body.appendChild(a);
                     a.click();
                     window.URL.revokeObjectURL(url);
                     document.body.removeChild(a);
-                    showMessage('PDF processed successfully! Download started.', 'success');
-                    form.reset();
-                    fileName.textContent = '';
-                    // Reset to first feature
-                    featureButtons[0].click();
+                    
+                    const successMsg = files.length === 1 
+                        ? 'PDF processed successfully! Download started.' 
+                        : `${files.length} PDFs processed successfully! Download started.`;
+                    showMessage(successMsg, 'success');
+                    
+                    // Fix: Properly reset form without breaking file input
+                    resetForm();
                 } else {
                     const error = await response.text();
                     showMessage('Error: ' + error, 'error');
@@ -319,9 +442,22 @@
                 showMessage('Error: ' + error.message, 'error');
             } finally {
                 submitBtn.disabled = false;
-                submitBtn.textContent = 'Process PDF';
+                submitBtn.textContent = 'Process PDF(s)';
             }
         });
+
+        function resetForm() {
+            // Reset file input properly
+            fileInput.value = '';
+            fileList.innerHTML = '';
+            fileName.textContent = '';
+            fileCount.textContent = '';
+            
+            // Reset to first feature
+            if (featureButtons.length > 0) {
+                featureButtons[0].click();
+            }
+        }
 
         function showMessage(text, type) {
             message.textContent = text;
