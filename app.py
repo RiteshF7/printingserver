@@ -6,8 +6,12 @@ from flask import Flask, render_template, request, jsonify, send_file
 from flask_cors import CORS
 import os
 import json
-from pdf_processor import process_pdf, process_multiple_pdfs, print_pdf
+import tempfile
+import threading
+import time
+from pdf_processor import process_pdf, process_multiple_pdfs, print_pdf, clone_page
 from printer_reverse import reverse_page, manual_reverse_instructions
+from pypdf import PdfReader, PdfWriter
 import logging
 
 app = Flask(__name__)
@@ -176,6 +180,155 @@ def download_file(filename):
     return jsonify({'error': 'File not found'}), 404
 
 
+@app.route('/list-pdfs', methods=['GET'])
+def list_pdfs():
+    """List all PDF files in the output folder"""
+    try:
+        pdf_files = []
+        if os.path.exists(OUTPUT_FOLDER):
+            for filename in os.listdir(OUTPUT_FOLDER):
+                if filename.lower().endswith('.pdf'):
+                    filepath = os.path.join(OUTPUT_FOLDER, filename)
+                    file_size = os.path.getsize(filepath)
+                    pdf_files.append({
+                        'filename': filename,
+                        'size': file_size,
+                        'size_mb': round(file_size / (1024 * 1024), 2)
+                    })
+        
+        # Sort by filename
+        pdf_files.sort(key=lambda x: x['filename'])
+        
+        return jsonify({
+            'success': True,
+            'pdfs': pdf_files
+        })
+    except Exception as e:
+        logger.error(f"Error listing PDFs: {str(e)}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/get-pdf-info', methods=['POST'])
+def get_pdf_info():
+    """Get information about a PDF file (page count, etc.)"""
+    try:
+        data = request.json
+        filename = data.get('filename')
+        
+        if not filename:
+            return jsonify({'error': 'No filename provided'}), 400
+        
+        filepath = os.path.join(OUTPUT_FOLDER, filename)
+        if not os.path.exists(filepath):
+            return jsonify({'error': 'File not found'}), 404
+        
+        reader = PdfReader(filepath)
+        total_pages = len(reader.pages)
+        
+        # Check if it's a processed PDF (has odd/even structure)
+        # For now, we'll assume any PDF can be split into odd/even
+        odd_pages = (total_pages + 1) // 2
+        even_pages = total_pages // 2
+        
+        return jsonify({
+            'success': True,
+            'filename': filename,
+            'total_pages': total_pages,
+            'odd_pages': odd_pages,
+            'even_pages': even_pages
+        })
+    except Exception as e:
+        logger.error(f"Error getting PDF info: {str(e)}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/print-odd-even', methods=['POST'])
+def print_odd_even():
+    """Print odd or even pages from a selected PDF"""
+    try:
+        data = request.json
+        filename = data.get('filename')
+        page_type = data.get('page_type')  # 'odd' or 'even'
+        printer_name = data.get('printer_name')
+        
+        if not filename or not page_type:
+            return jsonify({'error': 'Missing filename or page_type'}), 400
+        
+        if page_type not in ['odd', 'even']:
+            return jsonify({'error': 'page_type must be "odd" or "even"'}), 400
+        
+        filepath = os.path.join(OUTPUT_FOLDER, filename)
+        if not os.path.exists(filepath):
+            return jsonify({'error': 'PDF file not found'}), 404
+        
+        # Read the PDF
+        reader = PdfReader(filepath)
+        total_pages = len(reader.pages)
+        
+        # Create a temporary PDF with only odd or even pages
+        writer = PdfWriter()
+        
+        if page_type == 'odd':
+            # Add odd pages (1-indexed: 1, 3, 5, ...)
+            for i in range(0, total_pages, 2):
+                writer.add_page(reader.pages[i])
+        else:  # even
+            # Add even pages (1-indexed: 2, 4, 6, ...)
+            for i in range(1, total_pages, 2):
+                page = reader.pages[i]
+                # Clone and rotate 180° for even pages
+                cloned_page = clone_page(page)
+                cloned_page.rotate(180)
+                writer.add_page(cloned_page)
+        
+        # Save to temporary file
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.pdf', dir=OUTPUT_FOLDER)
+        temp_path = temp_file.name
+        temp_file.close()
+        
+        with open(temp_path, 'wb') as f:
+            writer.write(f)
+        
+        # Print the temporary file
+        print_pdf(temp_path, printer_name)
+        
+        # Clean up temp file after a delay (in production, use background task)
+        def cleanup_temp():
+            time.sleep(5)  # Wait 5 seconds
+            try:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+            except:
+                pass
+        
+        threading.Thread(target=cleanup_temp, daemon=True).start()
+        
+        return jsonify({
+            'success': True,
+            'message': f'Print job sent for {page_type} pages',
+            'pages_printed': len(writer.pages)
+        })
+    
+    except Exception as e:
+        logger.error(f"Error printing odd/even pages: {str(e)}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    import sys
+    # Allow port to be specified via command line or environment variable
+    port = 5001  # Default to 5001
+    if len(sys.argv) > 1:
+        try:
+            port = int(sys.argv[1])
+        except ValueError:
+            print(f"Invalid port number: {sys.argv[1]}. Using default port 5001.")
+    elif os.environ.get('PORT'):
+        try:
+            port = int(os.environ.get('PORT'))
+        except ValueError:
+            print(f"Invalid PORT environment variable. Using default port 5001.")
+    
+    print(f"Starting Flask server on port {port}...")
+    app.run(debug=True, host='0.0.0.0', port=port)
 

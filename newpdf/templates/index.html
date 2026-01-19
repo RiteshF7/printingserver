@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF Tools</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            border-radius: 10px;
+            padding: 40px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            max-width: 600px;
+            width: 100%;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        .upload-area {
+            border: 2px dashed #667eea;
+            border-radius: 8px;
+            padding: 40px;
+            text-align: center;
+            margin-bottom: 20px;
+            transition: all 0.3s;
+            cursor: pointer;
+        }
+        .upload-area:hover {
+            background: #f5f5f5;
+            border-color: #764ba2;
+        }
+        .upload-area.dragover {
+            background: #e8e4ff;
+            border-color: #764ba2;
+        }
+        input[type="file"] {
+            display: none;
+        }
+        .file-label {
+            display: block;
+            cursor: pointer;
+            color: #667eea;
+            font-size: 18px;
+            margin-bottom: 10px;
+        }
+        .file-name {
+            color: #666;
+            margin-top: 10px;
+            font-size: 14px;
+        }
+        .features {
+            margin-bottom: 20px;
+        }
+        .features-title {
+            font-size: 16px;
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 15px;
+        }
+        .feature-buttons {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        .feature-btn.duplex {
+            grid-column: 1 / -1;
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+            font-weight: bold;
+        }
+        .feature-btn.duplex:hover {
+            background: linear-gradient(135deg, #f5576c 0%, #f093fb 100%);
+        }
+        .feature-btn.duplex.active {
+            background: linear-gradient(135deg, #f5576c 0%, #f093fb 100%);
+        }
+        .feature-btn {
+            padding: 12px;
+            background: #f0f0f0;
+            color: #333;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .feature-btn:hover {
+            background: #e0e0e0;
+            border-color: #667eea;
+        }
+        .feature-btn.active {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-color: #667eea;
+        }
+        .rotate-options {
+            display: none;
+            margin-top: 15px;
+            padding: 15px;
+            background: #f9f9f9;
+            border-radius: 8px;
+        }
+        .rotate-options.show {
+            display: block;
+        }
+        .rotate-options label {
+            display: block;
+            margin-bottom: 10px;
+            color: #333;
+            font-weight: bold;
+        }
+        .rotate-options select {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 14px;
+            background: white;
+        }
+        button {
+            width: 100%;
+            padding: 15px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        button:hover {
+            transform: translateY(-2px);
+        }
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+        .message {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+            display: none;
+        }
+        .message.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .message.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>PDF Tools</h1>
+        <form id="uploadForm" enctype="multipart/form-data">
+            <div class="upload-area" id="uploadArea">
+                <label for="pdfFile" class="file-label">
+                    📄 Click to choose PDF or drag & drop
+                </label>
+                <input type="file" id="pdfFile" name="pdf" accept=".pdf" required>
+                <div class="file-name" id="fileName"></div>
+            </div>
+            
+            <div class="features">
+                <div class="features-title">Select a feature:</div>
+                <div class="feature-buttons">
+                    <button type="button" class="feature-btn active" data-feature="remove_first_last">
+                        Remove First & Last Page
+                    </button>
+                    <button type="button" class="feature-btn" data-feature="reverse_odd">
+                        Reverse Odd Pages
+                    </button>
+                    <button type="button" class="feature-btn" data-feature="rotate">
+                        Rotate Pages
+                    </button>
+                    <button type="button" class="feature-btn" data-feature="add_blank">
+                        Add Blank Page (If Odd)
+                    </button>
+                    <button type="button" class="feature-btn duplex" data-feature="duplex">
+                        🔄 Duplex Print Processor
+                    </button>
+                </div>
+                <div class="rotate-options" id="rotateOptions">
+                    <label for="rotateAngle">Rotation Angle:</label>
+                    <select id="rotateAngle" name="angle">
+                        <option value="90">90°</option>
+                        <option value="180" selected>180°</option>
+                        <option value="270">270°</option>
+                    </select>
+                </div>
+            </div>
+            
+            <input type="hidden" id="selectedFeature" name="feature" value="remove_first_last">
+            <button type="submit" id="submitBtn">Process PDF</button>
+            <div class="message" id="message"></div>
+        </form>
+    </div>
+    <script>
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('pdfFile');
+        const fileName = document.getElementById('fileName');
+        const form = document.getElementById('uploadForm');
+        const submitBtn = document.getElementById('submitBtn');
+        const message = document.getElementById('message');
+        const featureButtons = document.querySelectorAll('.feature-btn');
+        const selectedFeatureInput = document.getElementById('selectedFeature');
+        const rotateOptions = document.getElementById('rotateOptions');
+
+        // Feature button selection
+        featureButtons.forEach(btn => {
+            btn.addEventListener('click', () => {
+                featureButtons.forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                const feature = btn.getAttribute('data-feature');
+                selectedFeatureInput.value = feature;
+                
+                // Show/hide rotate options
+                if (feature === 'rotate' || feature === 'duplex') {
+                    rotateOptions.classList.add('show');
+                } else {
+                    rotateOptions.classList.remove('show');
+                }
+            });
+        });
+
+        uploadArea.addEventListener('click', () => fileInput.click());
+        
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+        
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+        
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            const files = e.dataTransfer.files;
+            if (files.length > 0 && files[0].type === 'application/pdf') {
+                fileInput.files = files;
+                updateFileName();
+            }
+        });
+
+        fileInput.addEventListener('change', updateFileName);
+
+        function updateFileName() {
+            if (fileInput.files.length > 0) {
+                fileName.textContent = fileInput.files[0].name;
+            } else {
+                fileName.textContent = '';
+            }
+        }
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            if (!fileInput.files.length) {
+                showMessage('Please select a PDF file', 'error');
+                return;
+            }
+
+            const formData = new FormData(form);
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Processing...';
+            message.style.display = 'none';
+
+            try {
+                const response = await fetch('/process', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'processed_' + fileInput.files[0].name;
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                    document.body.removeChild(a);
+                    showMessage('PDF processed successfully! Download started.', 'success');
+                    form.reset();
+                    fileName.textContent = '';
+                    // Reset to first feature
+                    featureButtons[0].click();
+                } else {
+                    const error = await response.text();
+                    showMessage('Error: ' + error, 'error');
+                }
+            } catch (error) {
+                showMessage('Error: ' + error.message, 'error');
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Process PDF';
+            }
+        });
+
+        function showMessage(text, type) {
+            message.textContent = text;
+            message.className = 'message ' + type;
+            message.style.display = 'block';
+        }
+    </script>
+</body>
+</html>
