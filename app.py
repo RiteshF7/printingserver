@@ -1,151 +1,161 @@
+"""
+Flask Web App for PDF Tools
+
+Provides a web interface for common PDF operations and duplex print processing.
+"""
+
 from flask import Flask, request, send_file, render_template
 import os
 import tempfile
 import zipfile
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import RequestEntityTooLarge
-from remove_first_last_page import remove_first_last_page
-from reverse_odd_pages import reverse_odd_pages
-from rotate_pages import rotate_pages
-from add_blank_page_if_odd import add_blank_page_if_odd
-from duplexprintprocessor import duplex_print_processor
+from duplexprintprocessor_optimized import (
+    remove_first_last_page,
+    rotate_all_pages,
+    add_blank_page_if_odd,
+    add_page_numbers,
+    duplex_print_processor_optimized,
+)
 
 app = Flask(__name__)
-app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB max total size (for multiple files)
+app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500 MB
 app.config['UPLOAD_FOLDER'] = tempfile.gettempdir()
+
 
 @app.errorhandler(RequestEntityTooLarge)
 def handle_file_too_large(e):
-    return 'Files are too large. Maximum total size is 500MB. Please upload smaller files.', 413
+    return 'Files too large. Maximum total size is 500 MB.', 413
+
 
 @app.route('/')
 def index():
     return render_template('index.html')
 
-def process_single_pdf(file, feature, angle=180):
-    """Process a single PDF file and return the output path."""
-    temp_input = tempfile.NamedTemporaryFile(delete=False, suffix='.pdf')
-    file.save(temp_input.name)
-    temp_input.close()
-    
-    temp_output = tempfile.NamedTemporaryFile(delete=False, suffix='.pdf')
-    temp_output.close()
-    
+
+# ---- Feature dispatch -------------------------------------------------------
+
+FEATURE_MAP = {
+    'remove_first_last': lambda inp, out, angle: remove_first_last_page(inp, out),
+    'rotate':            lambda inp, out, angle: rotate_all_pages(inp, angle, out),
+    'add_blank':         lambda inp, out, angle: add_blank_page_if_odd(inp, out),
+    'add_numbers':       lambda inp, out, angle: add_page_numbers(inp, out),
+    'duplex':            lambda inp, out, angle: duplex_print_processor_optimized(
+                             inp, out, rotation_angle=angle),
+}
+
+
+def _process_single_pdf(file, feature, angle=180):
+    """Save upload to a temp file, process it, return the output temp path."""
+    tmp_in = tempfile.NamedTemporaryFile(delete=False, suffix='.pdf')
+    file.save(tmp_in.name)
+    tmp_in.close()
+
+    tmp_out = tempfile.NamedTemporaryFile(delete=False, suffix='.pdf')
+    tmp_out.close()
+
     try:
-        # Process based on selected feature
-        if feature == 'remove_first_last':
-            remove_first_last_page(temp_input.name, temp_output.name)
-        elif feature == 'reverse_odd':
-            reverse_odd_pages(temp_input.name, temp_output.name)
-        elif feature == 'rotate':
-            rotate_pages(temp_input.name, angle, temp_output.name)
-        elif feature == 'add_blank':
-            add_blank_page_if_odd(temp_input.name, temp_output.name)
-        elif feature == 'duplex':
-            duplex_print_processor(temp_input.name, temp_output.name, angle)
-        else:
-            raise ValueError(f'Unknown feature: {feature}')
-        
-        # Clean up input temp file
-        os.unlink(temp_input.name)
-        
-        return temp_output.name
-    except Exception as e:
-        # Clean up on error
-        if os.path.exists(temp_input.name):
-            os.unlink(temp_input.name)
-        if os.path.exists(temp_output.name):
-            os.unlink(temp_output.name)
+        handler = FEATURE_MAP.get(feature)
+        if handler is None:
+            raise ValueError(f"Unknown feature: {feature}")
+        handler(tmp_in.name, tmp_out.name, angle)
+        return tmp_out.name
+    except Exception:
+        # Clean up output on failure
+        if os.path.exists(tmp_out.name):
+            os.unlink(tmp_out.name)
         raise
+    finally:
+        # Always clean up the input temp file
+        if os.path.exists(tmp_in.name):
+            os.unlink(tmp_in.name)
+
+
+# ---- Route -------------------------------------------------------------------
 
 @app.route('/process', methods=['POST'])
 def process_pdf():
     if 'pdf' not in request.files:
         return 'No file uploaded', 400
-    
-    # Get all uploaded files (support multiple)
-    files = request.files.getlist('pdf')
-    
-    # Filter out empty files
-    files = [f for f in files if f.filename != '']
-    
+
+    files = [f for f in request.files.getlist('pdf') if f.filename]
     if not files:
         return 'No file selected', 400
-    
-    # Validate all files are PDFs
-    for file in files:
-        if not file.filename.lower().endswith('.pdf'):
-            return f'Invalid file type: {file.filename}. Please upload PDF files only.', 400
-    
-    # Get the selected feature
+
+    for f in files:
+        if not f.filename.lower().endswith('.pdf'):
+            return f'Invalid file type: {f.filename}. PDF only.', 400
+
     feature = request.form.get('feature', 'remove_first_last')
     angle = int(request.form.get('angle', 180))
-    
-    processed_files = []
-    temp_files_to_cleanup = []
-    
+
+    processed = []          # list of {'path': ..., 'name': ...}
+    cleanup_paths = []
+
     try:
-        # Process each file
-        for file in files:
+        for f in files:
             try:
-                output_path = process_single_pdf(file, feature, angle)
-                processed_files.append({
-                    'path': output_path,
-                    'original_name': secure_filename(file.filename)
+                out_path = _process_single_pdf(f, feature, angle)
+                processed.append({
+                    'path': out_path,
+                    'name': secure_filename(f.filename),
                 })
-                temp_files_to_cleanup.append(output_path)
+                cleanup_paths.append(out_path)
             except Exception as e:
-                # Clean up already processed files
-                for pf in processed_files:
-                    if os.path.exists(pf['path']):
-                        os.unlink(pf['path'])
-                return f'Error processing {file.filename}: {str(e)}', 500
-        
-        # If single file, return it directly
-        if len(processed_files) == 1:
+                # Roll back already-processed files
+                for p in processed:
+                    if os.path.exists(p['path']):
+                        os.unlink(p['path'])
+                return f'Error processing {f.filename}: {e}', 500
+
+        # Single file → return PDF directly
+        if len(processed) == 1:
             return send_file(
-                processed_files[0]['path'],
+                processed[0]['path'],
                 as_attachment=True,
-                download_name=f'processed_{processed_files[0]["original_name"]}',
-                mimetype='application/pdf'
+                download_name=f"processed_{processed[0]['name']}",
+                mimetype='application/pdf',
             )
-        
-        # If multiple files, create a zip file
-        zip_path = tempfile.NamedTemporaryFile(delete=False, suffix='.zip')
-        zip_path.close()
-        temp_files_to_cleanup.append(zip_path.name)
-        
-        with zipfile.ZipFile(zip_path.name, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            for pf in processed_files:
-                zipf.write(pf['path'], f'processed_{pf["original_name"]}')
-        
-        # Clean up individual PDF files (they're now in the zip)
-        for pf in processed_files:
-            if os.path.exists(pf['path']):
-                os.unlink(pf['path'])
-        
+
+        # Multiple files → bundle into a ZIP
+        zip_tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.zip')
+        zip_tmp.close()
+        cleanup_paths.append(zip_tmp.name)
+
+        with zipfile.ZipFile(zip_tmp.name, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for p in processed:
+                zf.write(p['path'], f"processed_{p['name']}")
+
+        # Clean individual PDFs (now inside the ZIP)
+        for p in processed:
+            if os.path.exists(p['path']):
+                os.unlink(p['path'])
+
         return send_file(
-            zip_path.name,
+            zip_tmp.name,
             as_attachment=True,
             download_name='processed_pdfs.zip',
-            mimetype='application/zip'
+            mimetype='application/zip',
         )
-    
+
     except ValueError as e:
-        # Clean up temp files
-        for temp_file in temp_files_to_cleanup:
-            if os.path.exists(temp_file):
-                os.unlink(temp_file)
+        _cleanup(cleanup_paths)
         return str(e), 400
     except Exception as e:
-        # Clean up temp files
-        for temp_file in temp_files_to_cleanup:
-            if os.path.exists(temp_file):
-                os.unlink(temp_file)
-        return f'Error processing PDF: {str(e)}', 500
+        _cleanup(cleanup_paths)
+        return f'Error processing PDF: {e}', 500
+
+
+def _cleanup(paths):
+    for p in paths:
+        if os.path.exists(p):
+            os.unlink(p)
+
+
+# ---- Main --------------------------------------------------------------------
 
 if __name__ == '__main__':
-    print('Starting PDF Tools...')
-    print('Open your browser and go to: http://localhost:5001')
-    print('Press Ctrl+C to stop the server')
+    print('Starting PDF Tools …')
+    print('Open http://localhost:5001')
+    print('Press Ctrl+C to stop')
     app.run(debug=True, host='0.0.0.0', port=5001)
